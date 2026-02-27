@@ -1,0 +1,134 @@
+% MOV_HUE_RAW
+% -------------------------------------------------------------------------
+% To visualize spatiotemporal wave propagation (Figure 1A), we developed a 
+% MATLAB code that generates composite color images from time-lapse microscopy data
+%
+% Each output image encodes:
+%   Red   = t + 2*skipstep
+%   Green = t + skipstep
+%   Blue  = t
+%
+% This creates a temporal hue shift illustrating propagation direction.
+%
+% -------------------------------------------------------------------------
+%
+% ORGANIZED & DOCUMENTED FOR GITHUB
+%
+% -------------------------------------------------------------------------
+% INPUTS
+%   name        : filename of multi-frame TIFF stack
+%   firstFrame  : first frame index to process
+%   lastFrame   : last frame index to process
+%   skipstep    : frame interval between RGB channels
+%
+% OUTPUT
+%   skipstep    : returned unchanged (legacy compatibility)
+%
+% OUTPUT FILES
+%   Creates folder:
+%       <filename>_hue/
+%
+%   Saves TIFF images:
+%       <filename>_every<skipstep>_m<frame>.tif
+%
+% -------------------------------------------------------------------------
+% REQUIREMENTS
+%   MATLAB Image Processing Toolbox
+%
+% -------------------------------------------------------------------------
+
+%% ------------------------------------------------------------------------
+% Load image stack
+% -------------------------------------------------------------------------
+tic;
+
+InfoImage   = imfinfo(name);
+WImage      = InfoImage(1).Width;
+HImage      = InfoImage(1).Height;
+NumberImages = length(InfoImage);
+
+% Preallocate stack
+FinalImage = zeros(HImage, WImage, NumberImages, 'uint16');
+
+% Read TIFF stack
+for i = 1:NumberImages
+    FinalImage(:,:,i) = imread(name, 'Index', i);
+end
+
+toc;
+
+
+%% ------------------------------------------------------------------------
+% Create output directory
+% -------------------------------------------------------------------------
+outputFolder = [name '_hue'];
+mkdir(outputFolder);
+cd(outputFolder);
+
+
+%% ------------------------------------------------------------------------
+% Figure setup
+% -------------------------------------------------------------------------
+scrsz = get(0,'ScreenSize');
+
+figure( ...
+    'Position', [scrsz(3)*0.3 scrsz(4)*0.6 WImage HImage], ...
+    'PaperPosition', [0.25 2.5 WImage/150 HImage/150], ...
+    'PaperUnits', 'inches');
+
+lastframe = lastFrame - skipstep*3;
+
+
+%% ------------------------------------------------------------------------
+% Generate RGB temporal composites
+% -------------------------------------------------------------------------
+for j = firstFrame : lastframe
+
+    set(gca,'Position',[0 0 1 1]);
+
+    % --- Blue channel (earliest time point)
+    merge_image(:,:,3) = im2uint8( ...
+        imadjust(FinalImage(:,:,j), ...
+        stretchlim(FinalImage(:,:,j),[0.01 0.999]), ...
+        [0.01 0.99]));
+
+    % --- Green channel (intermediate)
+    merge_image(:,:,2) = im2uint8( ...
+        imadjust(FinalImage(:,:,j+skipstep), ...
+        stretchlim(FinalImage(:,:,j),[0.01 0.999]), ...
+        [0.01 0.99]));
+
+    % --- Red channel (latest time point)
+    merge_image(:,:,1) = im2uint8( ...
+        imadjust(FinalImage(:,:,j+skipstep*2), ...
+        stretchlim(FinalImage(:,:,j),[0.01 0.999]), ...
+        [0.01 0.99]));
+
+    % Display composite
+    imshow(merge_image);
+
+    axis on;
+    axis normal;
+    hold on;
+
+    % Remove axes for clean export
+    set(gca, ...
+        'XTick', nan, ...
+        'YTick', nan, ...
+        'visible', 'off', ...
+        'Units', 'normalized');
+
+    % Save image
+    outputName = [name '_every' num2str(skipstep) '_m' num2str(j) '.tif'];
+    print('-dtiff','-r150', outputName);
+
+end
+
+
+%% ------------------------------------------------------------------------
+% Cleanup
+% -------------------------------------------------------------------------
+cd('..');
+toc;
+
+end
