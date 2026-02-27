@@ -1,0 +1,204 @@
+function OS_plot_1c_peak_valley(ROI_profile, name, timeinterval, colorofcurve)
+% OS_plot_1c_peak_valley
+%
+% PURPOSE:
+%   Analyze a single ROI intensity time series to detect peaks and valleys,
+%   quantify rise/decay dynamics, and generate publication-quality plots.
+%
+% INPUTS:
+%   ROI_profile   - 1D vector of ROI intensity values
+%   name          - string used for figure and output file names
+%   timeinterval  - acquisition interval (in seconds)
+%   colorofcurve  - MATLAB color spec for plotting the trace
+%
+% OUTPUTS:
+%   - Raw and annotated plots saved to /0analysis_Plot
+%   - Excel file containing peak/valley metrics saved to /0analysis
+%
+% Written: 2025-06-20
+% Code used for analysis in Fung et al. 2026
+% Annotated for GitHub: 2026-02
+%
+% -------------------------------------------------------------------------
+
+%% -------------------- USER-DEFINED PARAMETERS ---------------------------
+
+maxlags = 20;                 %#ok<NASGU> reserved for future use
+smoothspan = 4;               % moving average span for smoothing
+minpkdis = round(20 / timeinterval); % minimum peak distance (frames)
+minpeakheight = 0.2;          % threshold on normalized signal (0–1)
+
+%% -------------------- PREPROCESSING -------------------------------------
+
+% Remove NaNs and enforce numeric type
+ROI_profile = ROI_profile(~isnan(ROI_profile));
+ROI_profile = double(ROI_profile);
+
+ll = length(ROI_profile);
+
+% Generate time axis in minutes
+timeaxis = (0:timeinterval:(ll-1)*timeinterval) / 60;
+
+% Dynamically scale figure width based on trace duration
+FigWidth = (0.3375 * 2) + ((((timeinterval * ll) / 60) / 10) * 2);
+if FigWidth < 4
+    FigWidth = FigWidth * 4;
+end
+
+%% -------------------- DIRECTORY SETUP -----------------------------------
+
+Folder1 = cd;
+
+warning off MATLAB:MKDIR:DirectoryExists
+warning('off', 'Images:initSize:adjustingMag');
+
+mkdir([Folder1 '/0analysis_Plot']);
+mkdir([Folder1 '/0analysis']);   % ensure analysis folder exists
+
+%% -------------------- PLOT 1: FULL RAW TRACE ----------------------------
+
+scrsz = get(0, 'ScreenSize');
+
+figure('Position', [1 scrsz(4)*0.8 scrsz(3)*0.6 scrsz(4)*0.2], ...
+       'PaperPosition', [1 12 FigWidth 1]);
+
+plot(timeaxis, ROI_profile, 'Color', colorofcurve, 'LineWidth', 0.7);
+set(gca, ...
+    'XTick', 0:5:round(ll*timeinterval*10/60)/10, ...
+    'XGrid', 'on', ...
+    'YLim', [min(ROI_profile) max(ROI_profile)], ...
+    'XLim', [0 round(ll*timeinterval*10/60)/10]);
+
+xlabel('Time (min)');
+
+cd([Folder1 '/0analysis_Plot']);
+saveas(gca, [name '_raw.tif'], 'tiff');
+
+%% -------------------- PLOT 2: SHORT TRACE WITH DOTS ----------------------
+% Used for manual inspection / counting
+
+figure('Position', [1 scrsz(4)*0.8 scrsz(3)*0.3 scrsz(4)*0.3], ...
+       'PaperPosition', [1 12 3.6 2]);
+
+plot(timeaxis, ROI_profile, '.', ...
+     'Color', colorofcurve, ...
+     'LineWidth', 0.7, ...
+     'MarkerSize', 10);
+
+set(gca, ...
+    'XTick', 0:2:10, ...
+    'XGrid', 'on', ...
+    'YLim', [min(ROI_profile) max(ROI_profile)], ...
+    'XLim', [0 4]);
+
+xlabel('Time (min)');
+
+cd([Folder1 '/0analysis_Plot']);
+saveas(gca, [name '_raw_crop_dot.tif'], 'tiff');
+
+%% -------------------- SIGNAL SMOOTHING & NORMALIZATION -------------------
+
+ROI_smooth = smooth(ROI_profile, smoothspan);
+
+% Normalize to [0,1] for peak detection
+ROI_norm = (ROI_smooth - min(ROI_smooth)) ./ ...
+           (max(ROI_smooth) - min(ROI_smooth));
+
+%% -------------------- PEAK DETECTION ------------------------------------
+
+[~, peakLocs] = findpeaks(ROI_norm, ...
+    'MinPeakDistance', minpkdis, ...
+    'MinPeakHeight', minpeakheight);
+
+%% -------------------- VALLEY DETECTION ----------------------------------
+% Valleys defined as sign change in first derivative (− → +)
+
+trace = ROI_norm(:);
+trace_d1 = gradient(trace);
+
+valleys = find(trace_d1(1:end-1) < 0 & trace_d1(2:end) > 0);
+
+%% -------------------- PEAK–VALLEY METRICS -------------------------------
+
+valleyBefore = [];
+valleyAfter  = [];
+risePhase    = [];
+dropPhase    = [];
+nextPeakIdx  = [];
+IPI          = [];
+
+for i = 1:length(peakLocs)
+    p = peakLocs(i);
+
+    % Valley before peak
+    vb = valleys(find(valleys < p, 1, 'last'));
+    if isempty(vb), vb = NaN; end
+
+    % Valley after peak
+    va = valleys(find(valleys > p, 1, 'first'));
+    if isempty(va), va = NaN; end
+
+    valleyBefore(end+1) = vb;
+    valleyAfter(end+1)  = va;
+
+    % Rise and decay times (in seconds)
+    risePhase(end+1) = (p - vb) * timeinterval;
+    dropPhase(end+1) = (va - p) * timeinterval;
+
+    % Inter-peak interval
+    if i < length(peakLocs)
+        nextPeakIdx(end+1) = peakLocs(i+1);
+        IPI(end+1) = (peakLocs(i+1) - p) * timeinterval;
+    else
+        nextPeakIdx(end+1) = NaN;
+        IPI(end+1) = NaN;
+    end
+end
+
+%% -------------------- EXPORT RESULTS ------------------------------------
+
+filenameColumn = repmat({name}, length(peakLocs), 1);
+
+T = table(filenameColumn, ...
+          peakLocs(:), ...
+          valleyBefore(:), ...
+          valleyAfter(:), ...
+          risePhase(:), ...
+          dropPhase(:), ...
+          nextPeakIdx(:), ...
+          IPI(:), ...
+    'VariableNames', {'Filename', 'PeakIndex', ...
+                      'ValleyBefore', 'ValleyAfter', ...
+                      'RiseTime_s', 'DropTime_s', ...
+                      'NextPeakIndex', 'IPI_s'});
+
+cd([Folder1 '/0analysis']);
+writetable(T, [name '.xlsx'], 'Sheet', 'PeaksAndValleys');
+
+%% -------------------- PLOT 3: PEAKS & VALLEYS OVER RAW TRACE -------------
+
+figure('Position', [1 scrsz(4)*0.8 scrsz(3)*0.6 scrsz(4)*0.2], ...
+       'PaperPosition', [1 12 FigWidth 1]);
+
+plot(timeaxis, ROI_profile, ...
+     'Color', colorofcurve, 'LineWidth', 0.5);
+hold on;
+
+plot(timeaxis(peakLocs), ROI_profile(peakLocs), ...
+     'm.', 'MarkerSize', 8);
+
+plot(timeaxis(valleyBefore(~isnan(valleyBefore))), ...
+     ROI_profile(valleyBefore(~isnan(valleyBefore))), ...
+     'b.', 'MarkerSize', 6);
+
+plot(timeaxis(valleyAfter(~isnan(valleyAfter))), ...
+     ROI_profile(valleyAfter(~isnan(valleyAfter))), ...
+     'b.', 'MarkerSize', 6);
+
+box off
+xlabel('Time (min)');
+
+cd([Folder1 '/0analysis_Plot']);
+saveas(gca, [name '_raw_crop_peak.tif'], 'tiff');
+
+cd(Folder1);
